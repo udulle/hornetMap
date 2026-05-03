@@ -1,0 +1,6 @@
+.Rhistory
+.RData
+.Rproj.user/
+couches_gis.gpkg
+*.html
+!web/**
