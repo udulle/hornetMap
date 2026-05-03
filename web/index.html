@@ -27,7 +27,7 @@
 </head>
 <body class="p-3">
 
-  <h2 class="mb-1" style="flex:0 0 auto;">Philippe et Mélanie chassent le Frelon</h2>
+  <h2 class="mb-1" style="flex:0 0 auto;">Apiculture Nyon - Observations de FAs</h2>
   <div id="map" class="mb-1"></div>
 
   <div class="d-flex align-items-center gap-3 flex-wrap mb-1" style="flex:0 0 auto;">
@@ -38,15 +38,17 @@
     <button class="btn btn-sm btn-outline-secondary" onclick="resetMap()">Réinitialiser</button>
   </div>
 
-  <h5 class="mb-1" style="flex:0 0 auto;">Données — cliquer sur une ligne ou un marqueur</h5>
+  <h5 class="mb-1" style="flex:0 0 auto;">Cliquer sur une ligne du tableau, ou sur un point de la carte</h5>
   <div class="table-scroll-wrapper">
     <table class="table table-bordered table-sm mb-0" id="point-table">
       <thead class="table-light">
         <tr>
           <th class="sortable-th" onclick="sortTable(0)">ID</th>
           <th class="sortable-th" onclick="sortTable(1)">Type</th>
-          <th class="sortable-th" onclick="sortTable(2)">Commune</th>
-          <th class="sortable-th" onclick="sortTable(3)">Date</th>
+          <th class="sortable-th" onclick="sortTable(2)">Prenom</th>
+          <th class="sortable-th" onclick="sortTable(3)">Nom</th>
+          <th class="sortable-th" onclick="sortTable(4)">Commune</th>
+          <th class="sortable-th" onclick="sortTable(5)">Date</th>
         </tr>
       </thead>
       <tbody id="point-tbody"></tbody>
@@ -490,20 +492,33 @@
         var nbFrelons    = (r.NbrFrelons   && r.NbrFrelons   !== 'N/A') ? r.NbrFrelons   : '';
         var commentaires = (r.Commentaires && r.Commentaires !== 'N/A') ? r.Commentaires : '';
         var adresse      = (r.Adresse      && r.Adresse      !== 'N/A') ? r.Adresse      : '';
+        var prenom       = (r.obs_Prenom   && r.obs_Prenom   !== 'N/A') ? r.obs_Prenom   : '';
+        var nom          = (r.obs_Nom      && r.obs_Nom      !== 'N/A') ? r.obs_Nom   : '';
+        var tel          = (r.obs_Tel      && r.obs_Tel      !== 'N/A') ? r.obs_Tel   : '';
+        var email        = (r.obs_Email    && r.obs_Email    !== 'N/A') ? r.obs_Email   : '';
+        var docs         = (r.Docs         && r.Docs         !== 'N/A') ? r.Docs        : '';
 
         /* --- Build the popup (shown when clicking a marker) ---
          *  Contains ALL fields; empty lines are filtered out.
          *  Coordinates link to Google Maps (opens app on mobile). */
         var gmapsUrl = 'https://www.google.com/maps?q=' + lat.toFixed(2) + ',' + lng.toFixed(2);
         var popupParts = [
-          '<b>#' + esc(r.obs_ID || '') + '</b> — <i>' + esc(cat) + '</i>',
-          '<b>Commune:</b> '      + esc(commune),
-          adresse      ? '<b>Adresse:</b> '      + esc(adresse)      : '',
+          '<b>Annonce #' + esc(r.obs_ID || '') + '</b> — <i>' + esc(cat) + '</i>',
           '<b>Date:</b> '         + esc(r.Date || ''),
           '<b>Coordonnées:</b> <a href="' + gmapsUrl + '" target="_blank">' + lat.toFixed(5) + ', ' + lng.toFixed(5) + '</a>',
+          '<b>Commune:</b> '      + esc(commune),
+          '<hr style="margin:4px 0;border:none;border-top:1px solid #ddd;">',
+          (r.obs_Prenom || r.obs_Nom) ? '<b>Observateur:</b> ' + esc((r.obs_Prenom || '') + ', ' + (r.obs_Nom || '')).trim() : '',
+          (r.obs_Tel || r.obs_Email) ? '<b>Obs. Contact:</b> ' + esc((r.obs_Tel || '') + ' / ' + (r.obs_Email || '')).trim() : '',
+          adresse      ? '<b>Adresse:</b> '      + esc(adresse)      : '',
+          '<hr style="margin:4px 0;border:none;border-top:1px solid #ddd;">',
           etat         ? '<b>État du nid:</b> '  + esc(etat)         : '',
           nbFrelons    ? '<b>Nb frelons:</b> '   + esc(nbFrelons)    : '',
-          commentaires ? '<b>Commentaires:</b> '  + esc(commentaires) : ''
+          commentaires ? '<b>Commentaires:</b> '  + esc(commentaires) : '',
+          docs ? '<b>Images:</b> ' + docs.split(/[\n;,]/).map(function(url, idx) {
+            url = url.trim();
+            return url ? '<a href="' + esc(url) + '" target="_blank">link' + (idx + 1) + '</a>' : '';
+          }).filter(Boolean).join(', ') : ''
         ].filter(Boolean).join('<br>');
 
         /* --- Create the circle marker ---
@@ -536,6 +551,8 @@
             esc(r.obs_ID || '') +
           '</td>' +
           '<td>' + esc(cat) + '</td>' +
+          '<td>' + esc(r.obs_Prenom || '') + '</td>' +
+          '<td>' + esc(r.obs_Nom || '') + '</td>' +
           '<td>' + esc(commune) + '</td>' +
           '<td>' + esc(r.Date || '') + '</td>';
         tbody.appendChild(tr);
