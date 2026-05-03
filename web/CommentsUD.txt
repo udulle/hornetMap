@@ -1,0 +1,7 @@
+Lecture des charactères avec accents
+Colonnes supplémentaires doivent être visibles
+Opérations des Points et Communes (st_join)?
+Pictures
+Selectionner seulement points qui sont dans le PGN
+Layer Control: 
+    last 10 observations

@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Frelon à pattes jaunes — Carte des observations</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" rel="stylesheet">
+  <style>
+    #map { height: 600px; }
+    .point-row { cursor: pointer; }
+    .point-row:hover { filter: brightness(0.95); }
+    .point-row.selected { font-weight: bold; }
+    .sortable-th { cursor: pointer; user-select: none; }
+    .sortable-th:hover { background-color: #e0e0e0; }
+    .sort-asc::after  { content: ' ▲'; font-size: .75em; }
+    .sort-desc::after { content: ' ▼'; font-size: .75em; }
+    .coord-display {
+      background: rgba(255,255,255,.85); padding: 3px 8px; border-radius: 4px;
+      font-size: 12px; font-family: monospace; white-space: nowrap;
+    }
+    .legend { background: #fff; padding: 8px 12px; border-radius: 5px; box-shadow: 0 0 15px rgba(0,0,0,.2); line-height: 1.8; }
+    .legend i { width: 12px; height: 12px; display: inline-block; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+    .table-scroll-wrapper { max-height: 300px; overflow-y: auto; border: 1px solid #dee2e6; }
+    .table-scroll-wrapper thead th { position: sticky; top: 0; z-index: 1; background: #f8f9fa; box-shadow: inset 0 -1px 0 #dee2e6; }
+  </style>
+</head>
+<body class="p-3">
+
+  <h2 class="mb-1" style="flex:0 0 auto;">Philippe et Mélanie chassent le Frelon</h2>
+  <div id="map" class="mb-1"></div>
+
+  <div class="d-flex align-items-center gap-3 flex-wrap mb-1" style="flex:0 0 auto;">
+    <label for="cat-filter" class="fw-bold">Filtrer par catégorie :</label>
+    <select id="cat-filter" class="form-select form-select-sm w-auto" onchange="filterCategory(this.value)">
+      <option value="All">Toutes</option>
+    </select>
+    <button class="btn btn-sm btn-outline-secondary" onclick="resetMap()">Réinitialiser</button>
+  </div>
+
+  <h5 class="mb-1" style="flex:0 0 auto;">Données — cliquer sur une ligne ou un marqueur</h5>
+  <div class="table-scroll-wrapper">
+    <table class="table table-bordered table-sm mb-0" id="point-table">
+      <thead class="table-light">
+        <tr>
+          <th class="sortable-th" onclick="sortTable(0)">ID</th>
+          <th class="sortable-th" onclick="sortTable(1)">Type</th>
+          <th class="sortable-th" onclick="sortTable(2)">Commune</th>
+          <th class="sortable-th" onclick="sortTable(3)">Date</th>
+        </tr>
+      </thead>
+      <tbody id="point-tbody"></tbody>
+    </table>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    /*
+     * ============================================================
+     *  CONFIG — All settings are grouped here for easy editing.
+     *  Change values below to customise the map without touching
+     *  the rest of the code.
+     * ============================================================
+     */
+    var CONFIG = {
+
+      /* ── Data source ─────────────────────────────────────
+       *  URL of the Google Sheet published as CSV.
+       *  To get it:  File → Share → Publish to web → CSV
+       *  Set to '' (empty string) to use built-in demo data. */
+      sheetCsvUrl: 'https://docs.google.com/spreadsheets/d/1ifhAN6VgKCpf_m_8bGG820oD9WW4yK00_sYlZXyRKIY/gviz/tq?tqx=out:csv&gid=0',
+
+      /* ── Initial map view ────────────────────────────────
+       *  center : [latitude, longitude] shown when the page loads
+       *  zoom   : initial zoom level (1 = world, 18 = buildings) */
+      center: [46.386208, 6.237873],
+      zoom: 11,
+
+      /* ── Marker colours by observation type ──────────────
+       *  Keys must match the "Type" column in the spreadsheet.
+       *  Values are CSS hex colours. */
+      palette: {
+        'Frelon':          '#e74c3c',   // red
+        'Nid':             '#3498db',   // blue
+        'Frelon et Nid':   '#2ecc71'    // green
+      },
+
+      /* ── Marker appearance ───────────────────────────────
+       *  radius      : circle size in pixels
+       *  weight      : border thickness
+       *  fillOpacity : 0 = transparent, 1 = solid */
+      markerRadius:      10,
+      markerWeight:      2,
+      markerFillOpacity: 1,
+
+      /* ── Zoom level when clicking a table row ──────────── */
+      clickZoom: 14,
+
+      /* ── Home button ─────────────────────────────────────
+       *  enabled  : true/false — show the "back to home" button
+       *  iconUrl  : URL of the small icon image
+       *  title    : tooltip text */
+      homeButton: {
+        enabled: true,
+        iconUrl: 'https://upload.wikimedia.org/wikipedia/commons/9/97/CHE_Nyon_Flag.svg',
+        title:   'Zoom Nyon'
+      },
+
+      /* ── Map controls on / off ───────────────────────────
+       *  Toggle each control independently. */
+      showLegend:       true,   // colour legend (bottom-left)
+      showCoordDisplay: true,   // mouse coordinates + zoom (bottom-right)
+
+      /* ── Overlay layers ──────────────────────────────────
+       *  Each entry defines one layer the user can toggle via the
+       *  layer-control panel.
+       *  - label     : display name in the layer control
+       *  - visible   : true = turned on at load, false = off (but
+       *                still appears in the panel)
+       *  - url       : path or URL to the GeoJSON file
+       *  - style     : Leaflet path style options
+       *  - tooltip   : optional — template using {PROPERTY_NAME}
+       */
+      overlays: [
+        {
+          label:   'FA Zone Nyon',
+          visible: true,
+          url:     'data/district_nyon.geojson',
+          style:   { color: 'black', weight: 2, fill: false }
+        },
+        {
+          label:   'Communes',
+          visible: false,
+          url:     'data/communes_nyon.geojson',
+          style:   { color: 'black', weight: 2, fillColor: '#DEB887', fillOpacity: 0.4, dashArray: '3' },
+          tooltip: '<b>{NAME}</b> ({NAME_KT})'
+        }
+      ],
+
+      /* ── WMS (cadastral) overlay ─────────────────────────
+       *  enabled : true/false
+       *  label   : display name in the layer control */
+      cadastre: {
+        enabled: true,
+        label:   'Cadastre VD (zoom 17)',
+        wmsUrl:  'https://www.ogc.vd.ch/public/services/OGC/wmsVD/Mapserver/Wmsserver',
+        layers:  ['vd.bien_fond', 'vd.bien_fond_no']
+      }
+    };
+
+    /*
+     * ============================================================
+     *  GLOBAL STATE
+     *  These variables are shared across functions.
+     * ============================================================
+     */
+    var map;                      // the Leaflet map instance
+    var _markers = {};            // { rowIndex: { layer, category } }
+    var _communesGeoJson = null;  // raw GeoJSON for commune lookup
+
+    /*
+     * ============================================================
+     *  initMap() — Creates the Leaflet map, base layers, overlays,
+     *  controls, and then triggers the data load.
+     * ============================================================
+     */
+    function initMap() {
+
+      /* --- Create the map in the #map <div> --- */
+      map = L.map('map').setView(CONFIG.center, CONFIG.zoom);
+
+      /* --- Base tile layers (only one visible at a time) ---
+       *  The first one added with .addTo(map) is the default. */
+      var cartodb = L.tileLayer(
+        'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+        { attribution: '© OpenStreetMap contributors, © CARTO', maxZoom: 20 }
+      );
+      var osm = L.tileLayer(
+        'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        { attribution: '© OpenStreetMap contributors', maxZoom: 19 }
+      );
+      var swisstopo = L.tileLayer.wms('https://wms.geo.admin.ch/', {
+        layers: 'ch.swisstopo.pixelkarte-farbe', format: 'image/png',
+        transparent: true, version: '1.3.0', attribution: '© swisstopo'
+      });
+
+      cartodb.addTo(map);  // default base layer
+
+      var baseLayers = { 'CartoDB': cartodb, 'OSM': osm, 'SwissTopo': swisstopo };
+      var overlayLayers = {};  // will be filled below
+
+      /* --- Cadastre WMS (optional) ---
+       *  Groups two WMS sub-layers (parcel borders + parcel numbers). */
+      if (CONFIG.cadastre.enabled) {
+        var wmsLayers = CONFIG.cadastre.layers.map(function(layerName) {
+          return L.tileLayer.wms(CONFIG.cadastre.wmsUrl, {
+            layers: layerName, format: 'image/png', transparent: true, version: '1.3.0'
+          });
+        });
+        overlayLayers[CONFIG.cadastre.label] = L.layerGroup(wmsLayers);
+      }
+
+      /* --- GeoJSON overlays (defined in CONFIG.overlays) ---
+       *  Each overlay is fetched, styled, and added to the layer
+       *  control. If "visible: true" it is also added to the map. */
+      var overlaysToLoad = CONFIG.overlays.length;
+      var overlaysLoaded = 0;
+
+      CONFIG.overlays.forEach(function(cfg) {
+        fetch(cfg.url)
+          .then(function(r) { return r.json(); })
+          .then(function(data) {
+
+            // Keep the communes data for point-in-polygon lookups
+            if (cfg.url.indexOf('communes') !== -1) {
+              _communesGeoJson = data;
+            }
+
+            var layer = L.geoJSON(data, {
+              style: cfg.style,
+              // If a tooltip template is defined, bind it to each feature
+              onEachFeature: cfg.tooltip ? function(feature, lyr) {
+                // Replace {PROP} placeholders with actual property values
+                var tip = cfg.tooltip.replace(/\{(\w+)\}/g, function(_, key) {
+                  return feature.properties[key] || '';
+                });
+                lyr.bindTooltip(tip, { sticky: true });
+              } : undefined
+            });
+
+            overlayLayers[cfg.label] = layer;
+
+            // Add to map right away if configured as visible
+            if (cfg.visible) {
+              layer.addTo(map);
+            }
+
+            // Rebuild the layer-control panel so the new layer appears
+            rebuildLayerControl(baseLayers, overlayLayers);
+
+            // Track loading progress — start data load once all overlays are ready
+            overlaysLoaded++;
+            if (overlaysLoaded === overlaysToLoad) {
+              loadData();
+            }
+          })
+          .catch(function(err) {
+            console.warn('Failed to load overlay ' + cfg.url + ':', err);
+            overlaysLoaded++;
+            if (overlaysLoaded === overlaysToLoad) loadData();
+          });
+      });
+
+      // If there are no overlays at all, load data immediately
+      if (overlaysToLoad === 0) loadData();
+
+      /* --- Layer control (top-right panel) ---
+       *  Lets the user switch base layers and toggle overlays. */
+      window._layerControl = L.control.layers(baseLayers, overlayLayers, { collapsed: false }).addTo(map);
+
+      /* --- Legend (bottom-left) ---
+       *  Shows a coloured dot for each Type defined in CONFIG.palette. */
+      if (CONFIG.showLegend) {
+        var legend = L.control({ position: 'bottomleft' });
+        legend.onAdd = function() {
+          var div = L.DomUtil.create('div', 'legend');
+          for (var cat in CONFIG.palette) {
+            div.innerHTML += '<i style="background:' + CONFIG.palette[cat] + '"></i>' + cat + '<br>';
+          }
+          return div;
+        };
+        legend.addTo(map);
+      }
+
+      /* --- Coordinate display (bottom-right) ---
+       *  Shows current zoom level and mouse lat/lng. */
+      if (CONFIG.showCoordDisplay) {
+        var coord = L.control({ position: 'bottomright' });
+        coord.onAdd = function() {
+          var div = L.DomUtil.create('div', 'coord-display');
+          div.innerHTML = 'Zoom: ' + map.getZoom();
+          // Update on mouse move
+          map.on('mousemove', function(e) {
+            div.innerHTML = 'Zoom: ' + map.getZoom() +
+              ' | Lat: ' + e.latlng.lat.toFixed(5) +
+              ' | Lng: ' + e.latlng.lng.toFixed(5);
+          });
+          // Clear coordinates when mouse leaves the map
+          map.on('mouseout', function() {
+            div.innerHTML = 'Zoom: ' + map.getZoom();
+          });
+          return div;
+        };
+        coord.addTo(map);
+      }
+
+      /* --- Home button (top-left, next to zoom controls) ---
+       *  Resets the view to CONFIG.center / CONFIG.zoom. */
+      if (CONFIG.homeButton.enabled) {
+        var HomeBtn = L.Control.extend({
+          options: { position: 'topleft' },
+          onAdd: function() {
+            var el = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
+            el.innerHTML =
+              '<a href="#" title="' + CONFIG.homeButton.title + '" ' +
+              'style="width:30px;height:30px;display:flex;align-items:center;justify-content:center;">' +
+              '<img src="' + CONFIG.homeButton.iconUrl + '" style="width:20px;height:20px;"></a>';
+            el.querySelector('a').onclick = function(e) {
+              e.preventDefault();
+              map.setView(CONFIG.center, CONFIG.zoom);
+            };
+            return el;
+          }
+        });
+        map.addControl(new HomeBtn());
+      }
+    }
+
+    /**
+     * rebuildLayerControl() — Destroys and recreates the layer-control
+     * panel. Called every time a new overlay finishes loading so it
+     * appears in the panel.
+     */
+    function rebuildLayerControl(baseLayers, overlayLayers) {
+      if (window._layerControl) map.removeControl(window._layerControl);
+      window._layerControl = L.control.layers(baseLayers, overlayLayers, { collapsed: false }).addTo(map);
+    }
+
+    /*
+     * ============================================================
+     *  POINT-IN-POLYGON  (ray-casting algorithm)
+     *  Used to determine which commune a lat/lng falls in, as a
+     *  fallback when the spreadsheet doesn't provide a Municipalite.
+     * ============================================================
+     */
+
+    /**
+     * pointInPolygon(lat, lng, coords)
+     *  coords : array of rings, each ring is an array of [lng, lat]
+     *  Returns true if the point is inside the polygon.
+     */
+    function pointInPolygon(lat, lng, coords) {
+      var inside = false;
+      for (var k = 0; k < coords.length; k++) {
+        var ring = coords[k];
+        for (var i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+          var xi = ring[i][1], yi = ring[i][0];   // GeoJSON is [lng, lat]
+          var xj = ring[j][1], yj = ring[j][0];
+          if (((yi > lng) !== (yj > lng)) &&
+              (lat < (xj - xi) * (lng - yi) / (yj - yi) + xi))
+            inside = !inside;
+        }
+      }
+      return inside;
+    }
+
+    /**
+     * findCommune(lat, lng)
+     *  Loops over all commune features and returns the NAME of the
+     *  first commune polygon that contains the point.
+     */
+    function findCommune(lat, lng) {
+      if (!_communesGeoJson) return '';
+      for (var i = 0; i < _communesGeoJson.features.length; i++) {
+        var f = _communesGeoJson.features[i];
+        var geom = f.geometry;
+        // MultiPolygon has an extra nesting level
+        var polys = (geom.type === 'MultiPolygon') ? geom.coordinates : [geom.coordinates];
+        for (var p = 0; p < polys.length; p++) {
+          if (pointInPolygon(lat, lng, polys[p])) return f.properties.NAME || '';
+        }
+      }
+      return '';
+    }
+
+    /*
+     * ============================================================
+     *  CSV PARSER
+     *  A simple state-machine parser that handles:
+     *   - quoted fields ("hello, world")
+     *   - escaped quotes ("say ""hello""")
+     *   - newlines inside quoted fields
+     *  Returns an array of objects keyed by the header row.
+     * ============================================================
+     */
+    function parseCsv(text) {
+      var rows = [];       // array of arrays (each inner array = one row)
+      var cur = [];        // fields collected for the current row
+      var field = '';      // current field being built character by character
+      var inQuote = false; // true while inside a quoted field
+
+      for (var i = 0; i < text.length; i++) {
+        var ch = text[i];
+
+        if (inQuote) {
+          // Two double-quotes in a row → one literal quote
+          if (ch === '"' && text[i + 1] === '"') { field += '"'; i++; }
+          // Single double-quote → end of quoted field
+          else if (ch === '"') { inQuote = false; }
+          // Anything else (including commas and newlines) → part of the field
+          else { field += ch; }
+        } else {
+          if (ch === '"')  { inQuote = true; }           // start quoted field
+          else if (ch === ',') { cur.push(field.trim()); field = ''; }  // field separator
+          else if (ch === '\n' || (ch === '\r' && text[i + 1] === '\n')) {
+            if (ch === '\r') i++;                        // skip \r in \r\n
+            cur.push(field.trim()); field = '';
+            if (cur.some(function(c) { return c !== ''; })) rows.push(cur);
+            cur = [];
+          } else { field += ch; }
+        }
+      }
+
+      // Push the last field / row
+      cur.push(field.trim());
+      if (cur.some(function(c) { return c !== ''; })) rows.push(cur);
+
+      if (rows.length < 2) return [];  // need at least a header + one data row
+
+      // First row = column headers; remaining rows become objects
+      var headers = rows[0];
+      return rows.slice(1).map(function(vals) {
+        var obj = {};
+        headers.forEach(function(h, idx) { obj[h] = vals[idx] || ''; });
+        return obj;
+      });
+    }
+
+    /*
+     * ============================================================
+     *  loadData() — Fetches the CSV from Google Sheets and passes
+     *  the parsed rows to renderPoints(). Falls back to hard-coded
+     *  demo data if no URL is configured.
+     * ============================================================
+     */
+    function loadData() {
+      var url = CONFIG.sheetCsvUrl;
+
+      if (!url) {
+        // Demo fallback data (useful for offline development)
+        var demo = [
+          { obs_ID:'1', Type:'Frelon',        Coordonnees:'46.377496, 6.230962', Municipalite:'Nyon',      Adresse:'Boiron',    Date:'01.01.2026', EtatduNid:'N/A', NbrFrelons:'1', Commentaires:'' },
+          { obs_ID:'2', Type:'Nid',            Coordonnees:'46.393785, 6.251560', Municipalite:'Prangins',  Adresse:'Chateau',   Date:'02.01.2026', EtatduNid:'active', NbrFrelons:'N/A', Commentaires:'' },
+          { obs_ID:'3', Type:'Frelon et Nid',  Coordonnees:'46.376733, 6.235920', Municipalite:'Nyon',      Adresse:'Plage',     Date:'03.01.2026', EtatduNid:'destroyed', NbrFrelons:'3', Commentaires:'' },
+          { obs_ID:'4', Type:'Nid',            Coordonnees:'46.382546, 6.147071', Municipalite:'La Rippe',  Adresse:'Jotti',     Date:'04.01.2026', EtatduNid:'active', NbrFrelons:'N/A', Commentaires:'' },
+          { obs_ID:'5', Type:'Frelon',         Coordonnees:'46.350840, 6.192785', Municipalite:'Begnins',   Adresse:'MelaMiel',  Date:'05.01.2026', EtatduNid:'N/A', NbrFrelons:'2', Commentaires:'' }
+        ];
+        renderPoints(demo);
+        return;
+      }
+
+      fetch(url)
+        .then(function(r) { return r.text(); })
+        .then(function(text) { renderPoints(parseCsv(text)); })
+        .catch(function(err) { console.error('Failed to load sheet:', err); });
+    }
+
+    /*
+     * ============================================================
+     *  renderPoints(rows) — Takes an array of row objects and:
+     *   1. Creates a coloured circle marker on the map for each row
+     *   2. Builds the popup with full detail
+     *   3. Appends a summary row to the HTML table
+     *   4. Populates the category filter dropdown
+     * ============================================================
+     */
+    function renderPoints(rows) {
+      var tbody   = document.getElementById('point-tbody');
+      var filterEl = document.getElementById('cat-filter');
+      var cats = new Set();  // unique category names
+      _markers = {};
+
+      rows.forEach(function(r, i) {
+
+        /* --- Parse coordinates ---
+         *  The spreadsheet stores them as "lat, lng" in one cell. */
+        var coords = (r.Coordonnees || '').split(',');
+        var lat = parseFloat(coords[0]);
+        var lng = parseFloat(coords[1]);
+        if (isNaN(lat) || isNaN(lng)) return;  // skip rows without valid coords
+
+        /* --- Determine category and colour --- */
+        var cat   = r.Type || 'Inconnu';
+        var color = CONFIG.palette[cat] || '#999';  // fallback grey
+        cats.add(cat);
+
+        /* --- Clean up optional fields (treat "N/A" as empty) --- */
+        var commune      = r.Municipalite || findCommune(lat, lng);
+        var etat         = (r.EtatduNid    && r.EtatduNid    !== 'N/A') ? r.EtatduNid    : '';
+        var nbFrelons    = (r.NbrFrelons   && r.NbrFrelons   !== 'N/A') ? r.NbrFrelons   : '';
+        var commentaires = (r.Commentaires && r.Commentaires !== 'N/A') ? r.Commentaires : '';
+        var adresse      = (r.Adresse      && r.Adresse      !== 'N/A') ? r.Adresse      : '';
+
+        /* --- Build the popup (shown when clicking a marker) ---
+         *  Contains ALL fields; empty lines are filtered out.
+         *  Coordinates link to Google Maps (opens app on mobile). */
+        var gmapsUrl = 'https://www.google.com/maps?q=' + lat.toFixed(2) + ',' + lng.toFixed(2);
+        var popupParts = [
+          '<b>#' + esc(r.obs_ID || '') + '</b> — <i>' + esc(cat) + '</i>',
+          '<b>Commune:</b> '      + esc(commune),
+          adresse      ? '<b>Adresse:</b> '      + esc(adresse)      : '',
+          '<b>Date:</b> '         + esc(r.Date || ''),
+          '<b>Coordonnées:</b> <a href="' + gmapsUrl + '" target="_blank">' + lat.toFixed(5) + ', ' + lng.toFixed(5) + '</a>',
+          etat         ? '<b>État du nid:</b> '  + esc(etat)         : '',
+          nbFrelons    ? '<b>Nb frelons:</b> '   + esc(nbFrelons)    : '',
+          commentaires ? '<b>Commentaires:</b> '  + esc(commentaires) : ''
+        ].filter(Boolean).join('<br>');
+
+        /* --- Create the circle marker ---
+         *  pane: 'markerPane' ensures markers draw above GeoJSON. */
+        var marker = L.circleMarker([lat, lng], {
+          radius:      CONFIG.markerRadius,
+          fillColor:   color,
+          color:       color,
+          weight:      CONFIG.markerWeight,
+          fillOpacity: CONFIG.markerFillOpacity,
+          pane:        'markerPane'
+        })
+          .bindPopup(popupParts, { maxWidth: 350 })
+          .on('click', function() { highlightRow(i); })
+          .addTo(map);
+
+        _markers[i] = { layer: marker, category: cat };
+
+        /* --- Create the table row (summary columns only) --- */
+        var tr = document.createElement('tr');
+        tr.id = 'row-' + i;
+        tr.className = 'point-row';
+        tr.dataset.color    = color;
+        tr.dataset.category = cat;
+        tr.onclick = function() { zoomTo(tr, lat, lng); };
+        tr.innerHTML =
+          '<td>' +
+            '<span style="display:inline-block;width:11px;height:11px;border-radius:50%;' +
+            'background:' + color + ';margin-right:7px;vertical-align:middle;"></span>' +
+            esc(r.obs_ID || '') +
+          '</td>' +
+          '<td>' + esc(cat) + '</td>' +
+          '<td>' + esc(commune) + '</td>' +
+          '<td>' + esc(r.Date || '') + '</td>';
+        tbody.appendChild(tr);
+      });
+
+      /* --- Populate the category filter dropdown --- */
+      Array.from(cats).sort().forEach(function(c) {
+        var opt = document.createElement('option');
+        opt.value = c;
+        opt.textContent = c;
+        filterEl.appendChild(opt);
+      });
+    }
+
+    /**
+     * esc(s) — Escapes a string for safe insertion into HTML.
+     * Creates a temporary text node so that <, >, & etc. are encoded.
+     */
+    function esc(s) {
+      var d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    /*
+     * ============================================================
+     *  INTERACTIONS — Functions triggered by user clicks on the
+     *  table or on map markers.
+     * ============================================================
+     */
+
+    /** Remove the highlight from all table rows. */
+    function clearSelection() {
+      document.querySelectorAll('.point-row').forEach(function(r) {
+        r.classList.remove('selected');
+        r.style.backgroundColor = '';
+      });
+    }
+
+    /** Called when the user clicks a TABLE ROW.
+     *  Highlights the row and flies the map to that point. */
+    function zoomTo(row, lat, lng) {
+      clearSelection();
+      row.classList.add('selected');
+      row.style.backgroundColor = row.dataset.color + '33';  // 33 = ~20% opacity
+      map.flyTo([lat, lng], CONFIG.clickZoom, { duration: 0.4 });
+    }
+
+    /** Called when the user clicks a MAP MARKER.
+     *  Highlights the corresponding table row and scrolls to it. */
+    function highlightRow(id) {
+      clearSelection();
+      var row = document.getElementById('row-' + id);
+      if (row) {
+        row.classList.add('selected');
+        row.style.backgroundColor = row.dataset.color + '33';
+        row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }
+
+    /** Filter markers and table rows by category (Type). */
+    function filterCategory(cat) {
+      clearSelection();
+      Object.keys(_markers).forEach(function(id) {
+        var m = _markers[id];
+        var vis = (cat === 'All' || m.category === cat);
+        // Show or hide the marker on the map
+        if (vis  && !map.hasLayer(m.layer)) map.addLayer(m.layer);
+        if (!vis &&  map.hasLayer(m.layer)) map.removeLayer(m.layer);
+      });
+      // Show or hide the matching table rows
+      document.querySelectorAll('.point-row').forEach(function(row) {
+        row.style.display = (cat === 'All' || row.dataset.category === cat) ? '' : 'none';
+      });
+    }
+
+    /** Sort the table by the clicked column header.
+     *  Toggles between ascending and descending on each click. */
+    function sortTable(col) {
+      var table = document.getElementById('point-table');
+      var tbody = table.querySelector('tbody');
+      var rows  = Array.from(tbody.querySelectorAll('tr.point-row'));
+      var th    = table.querySelectorAll('th')[col];
+
+      // Toggle direction
+      var asc = th.dataset.sort !== 'asc';
+      table.querySelectorAll('th').forEach(function(h) {
+        h.dataset.sort = '';
+        h.classList.remove('sort-asc', 'sort-desc');
+      });
+      th.dataset.sort = asc ? 'asc' : 'desc';
+      th.classList.add(asc ? 'sort-asc' : 'sort-desc');
+
+      rows.sort(function(a, b) {
+        var av = a.cells[col].textContent.trim();
+        var bv = b.cells[col].textContent.trim();
+        var an = parseFloat(av), bn = parseFloat(bv);
+        // Numeric comparison when both values are numbers
+        if (!isNaN(an) && !isNaN(bn)) return asc ? an - bn : bn - an;
+        // Otherwise alphabetical
+        return asc ? av.localeCompare(bv) : bv.localeCompare(av);
+      });
+
+      // Re-append rows in the new order
+      rows.forEach(function(r) { tbody.appendChild(r); });
+    }
+
+    /** Reset the map view and clear all filters. */
+    function resetMap() {
+      clearSelection();
+      document.getElementById('cat-filter').value = 'All';
+      filterCategory('All');
+      map.setView(CONFIG.center, CONFIG.zoom, { animate: true });
+    }
+
+    /*
+     * ============================================================
+     *  BOOT — Everything starts here.
+     * ============================================================
+     */
+    initMap();
+  </script>
+</body>
+</html>
